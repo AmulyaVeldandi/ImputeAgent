@@ -67,7 +67,7 @@ class LocalImputer:
                     model_filled[c] = model_filled[c].astype(float) + mnar_shift*std
 
         errs = imputation_errors(df_true, model_filled, mask_df, numeric, categorical)
-        auc = downstream_auc(pd.concat([model_filled.drop(columns=[]), df_true[target]], axis=1), target, numeric, categorical)
+        auc = downstream_auc(model_filled, target, numeric, categorical)
         return {"auc": auc, **errs}
 
     def apply_policy_return_imputed(self, df_missing, target, numeric, categorical, policy, decisions):
