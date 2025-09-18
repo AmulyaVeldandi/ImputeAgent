@@ -1,0 +1,8 @@
+{
+  "app": "npx ts-node --transpile-only bin/impute-agent.ts",
+  "context": {
+    "@aws-cdk/core:bootstrapQualifier": "impute",
+    "bedrockRegion": "us-east-1",
+    "sagemakerEndpointName": "impute-agent-endpoint"
+  }
+}
