@@ -1,0 +1,16 @@
+decider:
+  p_mnar_switch: 0.60
+  llm_conf_threshold: 0.70
+  llm_probe_size: 50
+  validation_min_pass: 0.95
+  per_cell_override: true
+  model_uncert_high: 0.75
+  weights:
+    w_auc: 2.0
+    w_rmse: 1.0
+    w_valid: 1.0
+    w_cost: 0.5
+    w_complex: 0.2
+  budget:
+    max_latency_s: 150
+    max_cost_usd: 2.00
