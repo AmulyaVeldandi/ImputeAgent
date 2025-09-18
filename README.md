@@ -207,6 +207,3 @@ MIT.
 Framingham-style sample data is open dataset.
 
 ---
-
-### One-liner for the hackathon submission
-> “Impute-Agent is an AWS-native autonomous agent that decides *how* to impute missing values using Bedrock reasoning and SageMaker models, verifies with a critic, quantifies MNAR risk with sensitivity bands, and returns a clean, audit-ready dataset via API.”
