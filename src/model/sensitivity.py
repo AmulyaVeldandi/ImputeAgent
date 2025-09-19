@@ -11,7 +11,7 @@ def run_sensitivity(df_true, df_missing, mask_df, target, numeric, categorical, 
         for c in numeric:
             std = float(pd.to_numeric(df_true[c], errors="coerce").dropna().std() or 0.0)
             if std>0: shifted[c] = shifted[c].astype(float) + d*std
-        auc = downstream_auc(pd.concat([shifted.drop(columns=[]), df_true[target]], axis=1), target, numeric, categorical)
+        auc = downstream_auc(shifted, target, numeric, categorical)
         errs = imputation_errors(df_true, shifted, mask_df, numeric, categorical)
         rows.append({"delta": d, "auc": auc, **errs})
     return rows

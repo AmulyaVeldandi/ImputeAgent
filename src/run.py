@@ -9,7 +9,7 @@ from .agent.critic import Critic
 from .agent.scribe import Scribe
 from .model.impute_model import LocalImputer
 from .model.sensitivity import run_sensitivity
-from .llm.llm_client import get_llm_client
+from .llm.llm_client import LocalLLMClient   # 🔹 changed
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -18,15 +18,15 @@ def parse_args():
     p.add_argument("--output", default="results/summary.csv")
     p.add_argument("--config", default="config/default.yaml")
     p.add_argument("--decider_config", default="config/decider.yaml")
-    p.add_argument("--llm", choices=["on","off"], default="on")
-    p.add_argument("--sensitivity", choices=["on","off"], default="on")
+    p.add_argument("--llm", choices=["stub", "openai-oss", "bedrock"], default="stub")
+    p.add_argument("--sensitivity", choices=["on", "off"], default="on")
     return p.parse_args()
 
 def main():
     args = parse_args()
     with open(args.config) as f: cfg = yaml.safe_load(f)
     with open(args.decider_config) as f: dcfg = yaml.safe_load(f)
-    np.random.seed(cfg.get("seed",42))
+    np.random.seed(cfg.get("seed", 42))
 
     outdir = Path(cfg["output"]["dir"]); outdir.mkdir(parents=True, exist_ok=True)
 
@@ -38,12 +38,13 @@ def main():
     numeric = [c for c in cfg["data"]["numeric"] if c in df.columns]
     categorical = [c for c in cfg["data"]["categorical"] if c in df.columns]
 
-    llm = get_llm_client(enabled=(args.llm=="on"))
+    # 🔹 instantiate new LLM client
+    llm = LocalLLMClient(backend=args.llm, enabled=(args.llm != "stub"))
 
     mech = MechanismDetector(llm=llm)
     designer = ImputerDesigner(llm=llm)
     decider = Decider(dcfg["decider"], llm=llm)
-    critic = Critic()
+    critic = Critic(llm_client=llm)   # 🔹 dual critic
     scribe = Scribe()
 
     rows = []
@@ -66,14 +67,15 @@ def main():
                 target=target, numeric=numeric, categorical=categorical,
                 policy=policy, decisions=decisions, downstream=cfg["evaluation"]["downstream_model"]
             )
-            score = critic.score(res)
-            results.append((score, policy, res))
+            eval_pack = critic.evaluate(res, {"policy": policy, "decisions": decisions})
+            score = eval_pack["numeric_score"]
+            results.append((score, policy, res, eval_pack))
 
         results.sort(key=lambda x: x[0], reverse=True)
-        top_score, top_policy, top_res = results[0]
+        top_score, top_policy, top_res, top_eval = results[0]
 
         sens_rows = []
-        if args.sensitivity=="on" and miss_type=="MNAR":
+        if args.sensitivity == "on" and miss_type == "MNAR":
             sens_rows = run_sensitivity(
                 df_true=df, df_missing=df_missing, mask_df=mask_df,
                 target=target, numeric=numeric, categorical=categorical,
@@ -85,6 +87,7 @@ def main():
             "missing_type": miss_type, "missing_fraction": miss_frac,
             "policy": json.dumps(top_policy),
             "score": top_score, **top_res,
+            "critic_eval": json.dumps(top_eval),
             "sensitivity": json.dumps(sens_rows) if sens_rows else "[]"
         })
 
@@ -105,7 +108,7 @@ def main():
 
     report = scribe.render_report(summary, best_policy_global)
     (outdir/"report.md").write_text(report)
-    print(f"Done. Wrote:\\n- {args.output}\\n- {outdir/'imputed.csv'}\\n- {outdir/'report.md'}")
+    print(f"Done. Wrote:\n- {args.output}\n- {outdir/'imputed.csv'}\n- {outdir/'report.md'}")
 
 if __name__ == "__main__":
     main()

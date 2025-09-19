@@ -2,3 +2,6 @@ numpy
 pandas
 scikit-learn
 pyyaml
+transformers>=4.40.0
+accelerate
+torch
