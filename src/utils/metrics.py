@@ -24,15 +24,24 @@ def imputation_errors(true_df, imputed_df, mask_df, numeric, categorical):
     return out
 
 def downstream_auc(df, target, numeric, categorical):
-    X = df[numeric+categorical].copy()
-    y = df[target].astype(int).values
-    pre = ColumnTransformer([
-        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
-        ("num", StandardScaler(), numeric),
+    X = df.drop(columns=[target])
+    y = df[target]
+
+    # Ensure y is a 1D array/series
+    if isinstance(y, pd.DataFrame):
+        if y.shape[1] == 1:
+            y = y.iloc[:, 0]
+        else:
+            raise ValueError(f"Target column '{target}' returned multiple columns: {y.columns.tolist()}")
+
+    pipe = Pipeline([
+        ("pre", ColumnTransformer([
+            ("num", StandardScaler(), numeric),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical)
+        ])),
+        ("clf", LogisticRegression(max_iter=500))
     ])
-    clf = LogisticRegression(max_iter=1000, solver="liblinear")
-    pipe = Pipeline([("pre", pre), ("clf", clf)])
     pipe.fit(X, y)
-    proba = pipe.predict_proba(X)[:,1]
-    auc = roc_auc_score(y, proba)
-    return float(auc)
+    y_pred = pipe.predict_proba(X)[:, 1]
+    return roc_auc_score(y, y_pred)
+
