@@ -1,49 +1,46 @@
-# import json, random
-
-# def get_llm_client(enabled: bool):
-#     return LocalLLMClient(enabled=enabled)
-
-# class LocalLLMClient:
-#     def __init__(self, enabled=True): self.enabled = enabled
-
-#     def decide(self, payload: dict) -> dict:
-#         if not self.enabled:
-#             return {"decision":"MODEL","confidence":0.8,"why":"LLM disabled"}
-#         if payload.get("col_type")=="categorical" and payload.get("cardinality",0)>=10:
-#             return {"decision":"LLM","confidence":0.75,"why":"high-card categorical"}
-#         return {"decision":"MODEL","confidence":0.8,"why":"default"}
-
-#     def impute(self, payload: dict) -> dict:
-#         if not self.enabled:
-#             return {"value": payload.get("column_stats",{}).get("mode","0"), "confidence":0.51, "justification":"stub"}
-#         stats = payload.get("column_stats",{})
-#         if "min" in stats and "max" in stats:
-#             v = 0.5*(stats["min"]+stats["max"])
-#             v += random.uniform(-0.05,0.05)*(stats["max"]-stats["min"])
-#             return {"value": round(v,2), "confidence":0.75, "justification":"centered value"}
-#         av = stats.get("allowed_values",["0"])
-#         return {"value": av[0], "confidence":0.8, "justification":"most frequent"}
-
-import random
+﻿import random
 import json
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import re
+try:
+    import torch
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+except ImportError:
+    torch = None
+    AutoTokenizer = None
+    AutoModelForCausalLM = None
+
 from src.llm.prompts import DECIDER_PROMPT, IMPUTER_PROMPT, CRITIC_PROMPT
 
+
 class LocalLLMClient:
+    _MODEL_CACHE = {}
+
     def __init__(self, backend="stub", model_name=None, enabled=True):
         self.enabled = enabled
         self.backend = backend
         self.model_name = model_name or "openai/gpt-oss-20b"
+        self.tokenizer = None
+        self.model = None
+        self.client = None
 
         if backend == "openai-oss" and enabled:
-            print(f"🔹 Loading OpenAI OSS model locally: {self.model_name}")
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.bfloat16,
-                device_map="auto"
-            )
+            if AutoTokenizer is None or AutoModelForCausalLM is None or torch is None:
+                raise RuntimeError("openai-oss backend requires transformers and torch. Install optional dependencies or use --llm stub")
+            cache_key = (backend, self.model_name)
+            cached = LocalLLMClient._MODEL_CACHE.get(cache_key)
+            if cached:
+                self.tokenizer, self.model = cached
+                print(f"[LLM] Reusing cached model: {self.model_name}")
+            else:
+                print(f"[LLM] Loading OpenAI OSS model locally: {self.model_name}")
+                tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch.bfloat16,
+                    device_map="auto"
+                )
+                LocalLLMClient._MODEL_CACHE[cache_key] = (tokenizer, model)
+                self.tokenizer, self.model = tokenizer, model
 
         elif backend == "bedrock" and enabled:
             # TODO: AWS Bedrock integration with boto3
@@ -56,21 +53,26 @@ class LocalLLMClient:
             outputs = self.model.generate(**inputs, max_new_tokens=max_new_tokens)
             return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-        elif self.backend == "bedrock":
+        if self.backend == "bedrock":
             raise NotImplementedError("Bedrock integration needs boto3 setup.")
 
-        else:
-            return ""
+        return ""
 
     def _safe_json_parse(self, text: str, fallback: dict) -> dict:
-        """Try to parse JSON output safely, fallback if needed"""
-        try:
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                return json.loads(text[start:end])
-        except Exception:
-            pass
+        """Extract JSON object returned by the LLM; otherwise surface raw text."""
+        candidates = []
+        if text:
+            matches = re.findall(r"\{[^{}]*\}", text, flags=re.DOTALL)
+            if matches:
+                candidates.extend(matches)
+        for chunk in reversed(candidates):
+            try:
+                return json.loads(chunk)
+            except Exception:
+                continue
+        cleaned = (text or "").strip()
+        if cleaned:
+            return {"raw_comment": cleaned}
         return fallback
 
     def decide(self, payload: dict) -> dict:
@@ -105,7 +107,7 @@ class LocalLLMClient:
 
         if self.backend == "openai-oss":
             stats = payload.get("column_stats", {})
-            col_type = payload.get("col_type", "unknown")
+            col_type = payload.get("column_type") or payload.get("col_type", "unknown")
 
             prompt = IMPUTER_PROMPT + f"\nColumn type: {col_type}\nStats: {stats}\n"
             text = self._generate(prompt)
