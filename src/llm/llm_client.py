@@ -1,6 +1,8 @@
-﻿import random
+import random
 import json
 import re
+from pathlib import Path
+
 try:
     import torch
     from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -11,6 +13,9 @@ except ImportError:
 
 from src.llm.prompts import DECIDER_PROMPT, IMPUTER_PROMPT, CRITIC_PROMPT
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_MODEL_DIR = PROJECT_ROOT / "models" / "openai-gpt-oss-20b"
+
 
 class LocalLLMClient:
     _MODEL_CACHE = {}
@@ -18,7 +23,7 @@ class LocalLLMClient:
     def __init__(self, backend="stub", model_name=None, enabled=True):
         self.enabled = enabled
         self.backend = backend
-        self.model_name = model_name or "openai/gpt-oss-20b"
+        self.model_name = model_name
         self.tokenizer = None
         self.model = None
         self.client = None
@@ -26,21 +31,34 @@ class LocalLLMClient:
         if backend == "openai-oss" and enabled:
             if AutoTokenizer is None or AutoModelForCausalLM is None or torch is None:
                 raise RuntimeError("openai-oss backend requires transformers and torch. Install optional dependencies or use --llm stub")
-            cache_key = (backend, self.model_name)
+
+            model_dir = Path(self.model_name) if self.model_name else DEFAULT_MODEL_DIR
+            if not model_dir.exists():
+                raise FileNotFoundError(
+                    f"Local model directory not found at {model_dir}. "
+                    "Place the manually downloaded weights/tokenizer files there or pass model_name to LocalLLMClient."
+                )
+            if not model_dir.is_dir():
+                raise NotADirectoryError(f"Expected a directory for the model path, got {model_dir}")
+
+            resolved_model = str(model_dir)
+            cache_key = (backend, resolved_model)
             cached = LocalLLMClient._MODEL_CACHE.get(cache_key)
             if cached:
                 self.tokenizer, self.model = cached
-                print(f"[LLM] Reusing cached model: {self.model_name}")
+                print(f"[LLM] Reusing cached model: {resolved_model}")
             else:
-                print(f"[LLM] Loading OpenAI OSS model locally: {self.model_name}")
-                tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                print(f"[LLM] Loading OpenAI OSS model from local path: {resolved_model}")
+                tokenizer = AutoTokenizer.from_pretrained(resolved_model, local_files_only=True)
                 model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name,
+                    resolved_model,
                     torch_dtype=torch.bfloat16,
-                    device_map="auto"
+                    device_map="auto",
+                    local_files_only=True
                 )
                 LocalLLMClient._MODEL_CACHE[cache_key] = (tokenizer, model)
                 self.tokenizer, self.model = tokenizer, model
+            self.model_name = resolved_model
 
         elif backend == "bedrock" and enabled:
             # TODO: AWS Bedrock integration with boto3
