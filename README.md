@@ -1,209 +1,142 @@
-# Impute-Agent 🧠🤖  
-**An AWS-native autonomous agent for missing-data imputation with LLM reasoning + classical ML.**
+# Impute-Agent
 
-Clinical and biomedical datasets often have missing values. That slows research, biases models, and burns analyst time. **Impute-Agent** detects missingness mechanisms (MCAR/MAR/MNAR), designs **per-column** imputation policies with an **LLM-backed Decider**, executes pipelines, evaluates RMSE/accuracy/AUC, runs MNAR sensitivity, and outputs a clean, audit-ready dataset.  
-Local run works out of the box. AWS hooks are built in (Bedrock, SageMaker, Lambda, API Gateway, S3) with a CDK app.
+Autonomous pipeline for handling missing data with a blend of classical ML imputers and optional LLM reasoning. Run fully locally with stubbed LLM decisions, or point to local/remote language models when available. AWS hooks (CDK, Lambda, API Gateway, Bedrock, SageMaker) are included but optional.
 
 ---
 
-## ✨ Highlights
-- **Agentic workflow**: Planner → Decider → Experimentalist → Critic → Scribe.  
-- **LLM for decisions**: Bedrock-ready client (local stub by default).  
-- **Per-column strategy**: choose MODEL (IterativeRF/KNN/Mean) vs **LLM imputer**; optional per-cell override.  
-- **MNAR sensitivity**: ±δ pattern-mixture shifts with banded metrics.  
-- **AWS-ready**: CDK deploys S3 (raw/outputs), Lambda, API Gateway, IAM; Bedrock + SageMaker call sites are stubbed in.
+## Highlights
+- Agentic workflow: Mechanism detector -> Policy designer -> Decider -> Experimentalist -> Critic -> Scribe.
+- Per-column decisions: choose IterativeRF, KNN, Mean, or LLM fills; per-cell overrides supported.
+- MNAR sensitivity analysis to stress-test downstream metrics under pattern shifts.
+- Local-first defaults: stub LLM backend; switch to local weights or Bedrock when ready.
+- AWS-ready CDK stack for serverless deployment.
 
 ---
 
-## 🧭 Repository Structure
+## Repository Layout
 ```
 Impute-Agent/
-├─ README.md
-├─ requirements.txt
-├─ config/
-│  ├─ default.yaml         # data columns, eval knobs, sensitivity deltas
-│  └─ decider.yaml         # Decider thresholds & weights
-├─ data/
-│  └─ framingham_sample.csv
-├─ results/                # outputs saved here
-├─ src/
-│  ├─ run.py               # local orchestrator (CLI)
-│  ├─ agent/
-│  │  ├─ mechanism_detector.py
-│  │  ├─ decider.py
-│  │  ├─ imputer_designer.py
-│  │  ├─ critic.py
-│  │  └─ scribe.py
-│  ├─ llm/
-│  │  ├─ llm_client.py     # local stub; Bedrock-ready interface
-│  │  └─ prompts.py
-│  ├─ model/
-│  │  ├─ impute_model.py   # IterativeRF/KNN/Mean + LLM override
-│  │  └─ sensitivity.py
-│  └─ utils/
-│     ├─ data_io.py
-│     ├─ metrics.py
-│     └─ validators.py
-└─ cdk/
-   ├─ README.md
-   ├─ package.json
-   ├─ cdk.json
-   ├─ tsconfig.json
-   ├─ bin/impute-agent.ts
-   ├─ lib/impute-agent-stack.ts
-   └─ lambda/lambda_handler.py
+  README.md
+  requirements.txt
+  model_download.py        # optional helper for Hugging Face snapshots
+  weights.py               # lazy loader for locally stored model artifacts
+  config/
+    default.yaml           # data columns, missingness grid, evaluation knobs
+    decider.yaml           # decider thresholds, weights, and budgets
+  data/
+    framingham_sample.csv  # sample dataset for local demos
+  results/                 # generated summaries (ignored by git)
+  models/                  # local model cache (ignored by git)
+  src/
+    run.py                 # CLI orchestrator
+    agent/
+      mechanism_detector.py
+      imputer_designer.py
+      decider.py
+      critic.py
+      scribe.py
+    llm/
+      llm_client.py        # stub + local/Bedrock clients
+      prompts.py
+    model/
+      impute_model.py      # IterativeRF/KNN/Mean + LLM override
+      sensitivity.py
+    utils/
+      data_io.py
+      metrics.py
+      validators.py
+  cdk/                     # AWS CDK application
 ```
+
+`.gitignore` keeps large model artifacts (`models/openai-gpt-oss-20b/`) and generated reports under `results/` out of source control. Regenerate those files locally after pulling if you need fresh outputs.
 
 ---
 
-## 🧪 Local Quickstart
+## Local Quickstart
 
-### 1) Setup
+### 1. Environment
 ```bash
 python -m venv .venv
-source .venv/bin/activate    # Windows: .venv\Scripts\activate
+# Windows
+.\.venv\Scripts\activate
+# macOS/Linux
+source .venv/bin/activate
+
 pip install -r requirements.txt
 ```
 
-### 2) Run a demo
+### 2. Run the demo (stubbed LLM)
 ```bash
-python -m src.run   --data data/framingham_sample.csv   --target TenYearCHD   --output results/summary.csv   --llm on   --sensitivity on
+python -m src.run \
+  --data data/framingham_sample.csv \
+  --target TenYearCHD \
+  --output results/summary.csv \
+  --llm stub \
+  --sensitivity on
 ```
+Artifacts land in `results/summary.csv`, `results/imputed.csv`, and `results/report.md` (all ignored by git).
 
-### 3) Artifacts
-- `results/summary.csv` — metrics per missingness type & fraction.
-- `results/imputed.csv` — final imputed dataset with best policy.
-- `results/report.md` — human-readable summary (policy + results).
-
----
-
-## ⚙️ Configuration
-
-### `config/default.yaml`
-- `data.numeric`, `data.categorical` — columns to treat as numeric or categorical.
-- `missingness.types` — MCAR, MAR, MNAR (simulated for eval).
-- `missingness.fractions` — 0.1, 0.2, 0.3.
-- `evaluation.sensitivity_deltas` — e.g., `[-0.05, 0.0, 0.05]`.
-
-### `config/decider.yaml`
-- `p_mnar_switch` — threshold to consider MNAR strong.
-- `llm_conf_threshold`, `validation_min_pass` — safety gates for LLM fills.
-- `per_cell_override` — allow per-row LLM overrides.
-- `weights` — utility weights for AUC, RMSE, validation, cost, complexity.
+### 3. Optional: use local LLM weights
+1. Authenticate with Hugging Face (`huggingface-cli login`).
+2. Download weights into `models/openai-gpt-oss-20b/`:
+   ```bash
+   python model_download.py
+   ```
+3. Point the CLI to the local model:
+   ```bash
+   python -m src.run ... --llm openai-oss
+   ```
+   The loader reads local files only; ensure the snapshot exists before enabling.
 
 ---
 
-## 🧠 How the Agent Decides
+## Configuration Notes
+- `config/default.yaml`: numeric/categorical column lists, missingness grid, evaluation settings, sensitivity deltas, output directory.
+- `config/decider.yaml`: thresholds for switching to the LLM, confidence limits, probe size, scoring weights, and resource budget hints.
 
-- **MechanismDetector**: heuristic + logistic probe to label columns MCAR/MAR/MNAR.  
-- **ImputerDesigner**: proposes 3–4 candidate policies (IterativeRF, KNN for cats, or LLM for cats; optional MNAR shift).  
-- **Decider**: picks **MODEL vs LLM** per column (and optional per cell) using column type, cardinality, mechanism, probes, and thresholds in `decider.yaml`.  
-- **Experimentalist**: executes policy, computes imputation errors on masked entries and downstream AUC.  
-- **Critic**: selects the best policy with a multi-objective score.  
-- **Scribe**: writes a concise report (best policy + metrics table).
-
-**LLM roles (local stub; Bedrock-ready):**  
-- *Decider mode*: choose LLM vs MODEL for hard columns.  
-- *LLM-imputer*: returns a value using row + dataset constraints; strict validator enforces schema/ranges.
+Override any config path via `--config` or `--decider_config` on the CLI.
 
 ---
 
-## 📊 Outputs & What to Look For
-- **avg_rmse** — mean RMSE over masked numeric cells.  
-- **avg_acc** — mean accuracy over masked categorical cells.  
-- **auc** — downstream classification AUC.  
-- **sensitivity** — AUC and errors under ±δ shifts for MNAR columns.
-
-**Win condition for demos:** AUC stays within ≈0.02 of baseline under 20–30% MCAR/MAR; sensitivity bands are narrow under MNAR.
-
----
-
-## ☁️ AWS Deployment (CDK)
-
-> The CDK app creates: S3 (raw/outputs), Lambda (S3 + API trigger), API Gateway, IAM perms to invoke **Bedrock** and **SageMaker**. You still need to stand up a SageMaker endpoint (or refactor Lambda to run batch / AWS SDK-based imputers).
-
-### 1) Prereqs
-- Node 18+, AWS CLI, AWS CDK v2, Python 3.11.
-- Configure AWS CLI: `aws configure`.
-- Bootstrap once:  
-  ```bash
-  cdk bootstrap
-  ```
-
-### 2) Configure context
-Edit `cdk/cdk.json` or pass `-c`:
-```json
-{
-  "bedrockRegion": "us-east-1",
-  "sagemakerEndpointName": "impute-agent-endpoint"
-}
-```
-
-### 3) Deploy
-```bash
-cd cdk
-npm install
-cdk deploy
-```
-
-**Outputs:**
-- `ApiUrl` — call `POST {ApiUrl}/impute`.
-- `RawBucketName` — upload CSVs here to auto-trigger the pipeline.
-- `OutputsBucketName` — imputed CSVs land here.
-
-### 4) Invoke
-- **S3 trigger**: put `file.csv` into `RawBucketName`.  
-- **API call**:
-```bash
-curl -X POST "{ApiUrl}/impute"   -H "Content-Type: application/json"   -d '{"s3_key": "path/in/raw-bucket/file.csv"}'
-```
-or embed CSV:
-```bash
-curl -X POST "{ApiUrl}/impute"   -H "Content-Type: application/json"   -d '{"csv": "col1,col2
-1,NA
-2,3
-"}'
-```
-
-### 5) Wire real services
-- **Bedrock**: replace `src/llm/llm_client.py` with a Bedrock client; update `cdk/lambda/lambda_handler.py::call_bedrock_reasoning` to your model ID + tool protocol.  
-- **SageMaker**: replace `src/model/impute_model.py` calls with `sagemaker-runtime:InvokeEndpoint` in Lambda or call your endpoint from the orchestrator.
-
-> Cost tips: use small instances, stop endpoints when idle, consider Batch Transform, set Bedrock call caps.
+## Pipeline Overview
+1. **MechanismDetector** labels columns MCAR/MAR/MNAR with lightweight heuristics.
+2. **ImputerDesigner** proposes candidate policies (per-column method mixes).
+3. **Decider** chooses MODEL or LLM per column using stats, cardinality, and missingness context; falls back when the LLM is disabled.
+4. **LocalImputer** materialises each policy with Iterative Imputer, KNN, Mean, or LLM fills plus optional MNAR shifts.
+5. **Critic** ranks policies using downstream AUC alongside RMSE/accuracy metrics.
+6. **Scribe** emits a Markdown report summarising the best policy.
 
 ---
 
-## 🔐 Security & Safety
-- No PHI in sample data.  
-- LLM never fills identifier columns.  
-- Validators enforce numeric ranges and categorical vocab.  
-- Buckets are private + SSE-S3 by default (CDK stack).  
-- Least-privilege IAM recommended (tighten ARNs after prototyping).
+## AWS Deployment (Optional)
+The `cdk/` package provisions S3 buckets, Lambda, API Gateway, and IAM roles that can call Bedrock or SageMaker.
+1. Install Node 18+, AWS CLI, and AWS CDK v2; run `aws configure`.
+2. Bootstrap once with `cdk bootstrap`.
+3. In `cdk/`, run `npm install` then `cdk deploy` (set context like `bedrockRegion` or `sagemakerEndpointName` in `cdk.json`).
+4. Upload CSVs to the raw bucket or call the API endpoint to trigger the pipeline.
+
+Adapt `src/llm/llm_client.py` and the Lambda handler to integrate production LLMs or imputation endpoints.
 
 ---
 
-## 🧩 Troubleshooting
-- **`Target ... not in CSV columns`**: fix `--target` or update `config/default.yaml`.  
-- **AUC is `nan`**: target must be binary integers (0/1) and not all one class.  
-- **LLM off**: run with `--llm off` for a baseline.  
-- **CDK destroy blocked**: empty the buckets then `cdk destroy`.
+## Git Hygiene Tips
+- If results were previously tracked, run `git rm --cached results/*.csv results/*.md` before committing.
+- Keep downloaded model weights under `models/` (ignored) or mount them externally; never commit the 20B snapshot.
+- Regenerate local summaries after pulling if you need fresh artifacts for analysis.
 
 ---
 
-## 🛣️ Roadmap (nice-to-have)
-- Add **SoftImpute/GAIN/VAE** as extra tools.  
-- Bedrock **AgentCore** loop with explicit tool schemas for `propose_value`.  
-- Add **Amazon Q** interface for “Explain what changed and why”.  
-- Per-column **uncertainty visualizations** and calibration plots.
+## Troubleshooting
+- `ValueError: Target ... not in CSV columns`: fix `--target` or adjust `config/default.yaml`.
+- Long runtimes or memory spikes: ensure `--llm stub` unless the weights are present and hardware can host them.
+- `huggingface_hub` errors: confirm network access and authentication before running `model_download.py`.
 
 ---
 
-## 📝 License
-MIT.
+## License
+MIT License. See `LICENSE` for details.
 
 ---
 
-## 💬 Acknowledgements
-Framingham-style sample data is open dataset.
-
----
+## Acknowledgements
+Sample dataset based on Framingham heart study derivatives.
