@@ -1,0 +1,22 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local model weights (downloaded artifacts)
+models/openai-gpt-oss-20b/
+*.safetensors
+*.bin
+
+# Transient results
+results/*.csv
+results/*.md
+results/*.json
+
+# Misc
+*.log
+*.tmp
