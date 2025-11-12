@@ -1,5 +1,7 @@
-﻿import pandas as pd
+import pandas as pd
+import logging
 from typing import Dict, List
+from functools import lru_cache
 from sklearn.experimental import enable_iterative_imputer  # noqa
 from sklearn.impute import SimpleImputer, KNNImputer, IterativeImputer
 from sklearn.ensemble import RandomForestRegressor
@@ -8,12 +10,15 @@ from src.agent.decider import Decision
 from ..utils.validators import validate_cell, column_constraints
 from ..utils.metrics import imputation_errors, downstream_auc
 
+logger = logging.getLogger(__name__)
+
 
 class LocalImputer:
-    def __init__(self, llm_client=None):
+    def __init__(self, llm_client=None, cache_size=1000):
         # Pass in the LLM client from run.py so backend choice is respected
         self.llm_client = llm_client
         self._llm_cache: Dict = {}
+        self._cache_size = cache_size
 
     def _canonical_method(self, name: str) -> str:
         if not name:
@@ -114,6 +119,12 @@ class LocalImputer:
                     out.at[idx, col] = cached_value
                     continue
 
+                # Implement LRU eviction if cache is too large
+                if len(self._llm_cache) >= self._cache_size:
+                    # Remove oldest entry (simple FIFO for now)
+                    first_key = next(iter(self._llm_cache))
+                    del self._llm_cache[first_key]
+
                 payload = {
                     "column": col,
                     "column_type": "categorical" if col in categorical else ("numeric" if col in numeric else "other"),
@@ -140,7 +151,7 @@ class LocalImputer:
                     out.at[idx, col] = value
                     self._llm_cache[cache_key] = value
                 else:
-                    print(f"[WARN] LLM produced invalid value for {col} at index {idx}: {response}")
+                    logger.warning(f"LLM produced invalid value for {col} at index {idx}: {response}")
                     if "allowed_values" in cons and cons["allowed_values"]:
                         fallback = cons["allowed_values"][0]
                     elif "min" in cons and "max" in cons:
@@ -196,7 +207,7 @@ class LocalImputer:
         nan_counts = filled.isna().sum()
         if nan_counts.any():
             remaining = {k: int(v) for k, v in nan_counts[nan_counts > 0].items()}
-            print(f"[WARN] NaNs remain before downstream model: {remaining}")
+            logger.warning(f"NaNs remain before downstream model: {remaining}")
 
         errs = imputation_errors(df_true, filled, mask_df, numeric, categorical)
         auc = downstream_auc(filled, target, numeric, categorical)

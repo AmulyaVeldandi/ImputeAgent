@@ -1,7 +1,14 @@
-﻿import argparse, os, json, yaml, numpy as np, pandas as pd
+import argparse
+import os
+import json
+import yaml
+import logging
+import numpy as np
+import pandas as pd
 from pathlib import Path
 
 from .utils.data_io import load_csv, inject_missingness_grid
+from .utils.config_validator import validate_config, validate_decider_config
 from .agent.mechanism_detector import MechanismDetector
 from .agent.imputer_designer import ImputerDesigner
 from .agent.decider import Decider
@@ -26,16 +33,58 @@ def parse_args():
 
 def main():
     args = parse_args()
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
-    with open(args.decider_config) as f:
-        dcfg = yaml.safe_load(f)
-    np.random.seed(cfg.get("seed", 42))
+
+    # Setup logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+
+    # Load config files with error handling
+    try:
+        with open(args.config) as f:
+            cfg = yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error(f"Config file not found: {args.config}")
+        raise
+    except yaml.YAMLError as e:
+        logger.error(f"Invalid YAML in config file: {e}")
+        raise
+
+    try:
+        with open(args.decider_config) as f:
+            dcfg = yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error(f"Decider config file not found: {args.decider_config}")
+        raise
+    except yaml.YAMLError as e:
+        logger.error(f"Invalid YAML in decider config: {e}")
+        raise
+
+    # Validate configurations
+    try:
+        validate_config(cfg)
+        validate_decider_config(dcfg)
+    except ValueError as e:
+        logger.error(f"Configuration validation failed: {e}")
+        raise
+
+    seed = cfg.get("seed", 42)
+    np.random.seed(seed)
+    logger.info(f"Using random seed: {seed}")
 
     outdir = Path(cfg["output"]["dir"])
     outdir.mkdir(parents=True, exist_ok=True)
 
-    df = load_csv(args.data)
+    try:
+        df = load_csv(args.data)
+    except FileNotFoundError:
+        logger.error(f"Data file not found: {args.data}")
+        raise
+    except Exception as e:
+        logger.error(f"Failed to load data file: {e}")
+        raise
     if args.target not in df.columns:
         raise ValueError(f"Target {args.target} not in CSV columns.")
     target = args.target
@@ -43,9 +92,11 @@ def main():
     numeric = [c for c in cfg["data"]["numeric"] if c in df.columns]
     categorical = [c for c in cfg["data"]["categorical"] if c in df.columns]
 
+    logger.info(f"Loaded {len(df)} rows, {len(numeric)} numeric and {len(categorical)} categorical columns")
+
     llm_cfg = cfg.get("llm", {})
     llm_enabled = bool(llm_cfg.get("enabled", True))
-    llm = LocalLLMClient(backend=args.llm, enabled=llm_enabled)
+    llm = LocalLLMClient(backend=args.llm, enabled=llm_enabled, random_seed=seed)
 
     mech = MechanismDetector(llm=llm)
     designer = ImputerDesigner(llm=llm)
@@ -137,8 +188,13 @@ def main():
             best_score_global, best_policy_global = top_score, top_policy
 
     summary = pd.DataFrame(rows)
-    summary.to_csv(args.output, index=False)
-    summary.to_csv(outdir / "summary.csv", index=False)
+    try:
+        summary.to_csv(args.output, index=False)
+        summary.to_csv(outdir / "summary.csv", index=False)
+        logger.info(f"Saved summary to {args.output}")
+    except Exception as e:
+        logger.error(f"Failed to save summary: {e}")
+        raise
 
     imputer = LocalImputer(llm_client=llm)
     df_missing = df.copy()
@@ -147,11 +203,23 @@ def main():
     mechanism_map = get_mechanism(base_key, df_missing, target, numeric, categorical)
     decisions = get_decisions(base_key, df, df_missing, target, numeric, categorical, mechanism_map, imputer)
     final = imputer.apply_policy_return_imputed(df_missing, target, numeric, categorical, best_policy_global, decisions)
-    final.to_csv(outdir / "imputed.csv", index=False)
+
+    try:
+        final.to_csv(outdir / "imputed.csv", index=False)
+        logger.info(f"Saved imputed data to {outdir / 'imputed.csv'}")
+    except Exception as e:
+        logger.error(f"Failed to save imputed data: {e}")
+        raise
 
     report = scribe.render_report(summary, best_policy_global)
-    (outdir / "report.md").write_text(report)
-    print(f"Done. Wrote:\n- {args.output}\n- {outdir/'imputed.csv'}\n- {outdir/'report.md'}")
+    try:
+        (outdir / "report.md").write_text(report)
+        logger.info(f"Saved report to {outdir / 'report.md'}")
+    except Exception as e:
+        logger.error(f"Failed to save report: {e}")
+        raise
+
+    logger.info(f"Done. Wrote:\n- {args.output}\n- {outdir/'imputed.csv'}\n- {outdir/'report.md'}")
 
 
 if __name__ == "__main__":

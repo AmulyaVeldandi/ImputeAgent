@@ -48,45 +48,38 @@ Impute-Agent/
   cdk/                     # AWS CDK application
 ```
 
-`.gitignore` keeps large model artifacts (`models/openai-gpt-oss-20b/`) and generated reports under `results/` out of source control. Regenerate those files locally after pulling if you need fresh outputs.
+`.gitignore` keeps large model artifacts (`models/`) and generated reports under `results/` out of source control.
 
 ---
 
 ## Local Quickstart
 
-### 1. Environment
+### 1. Install dependencies
 ```bash
-python -m venv .venv
-# Windows
-.\.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
+# Basic installation (no LLM)
+pip install -r requirements-base.txt
 
+# Or full installation with LLM support
 pip install -r requirements.txt
 ```
 
-### 2. Run the demo (stubbed LLM)
+### 2. Run the demo
 ```bash
+# Without LLM (classical methods only)
 python -m src.run \
   --data data/framingham_sample.csv \
   --target TenYearCHD \
-  --output results/summary.csv \
-  --llm stub \
-  --sensitivity on
-```
-Artifacts land in `results/summary.csv`, `results/imputed.csv`, and `results/report.md` (all ignored by git).
+  --llm stub
 
-### 3. Optional: use local LLM weights
-1. Authenticate with Hugging Face (`huggingface-cli login`).
-2. Download weights into `models/openai-gpt-oss-20b/`:
-   ```bash
-   python model_download.py
-   ```
-3. Point the CLI to the local model:
-   ```bash
-   python -m src.run ... --llm openai-oss
-   ```
-   The loader reads local files only; ensure the snapshot exists before enabling.
+# With local LLM (optional)
+python model_download.py  # Download phi-2 (~5GB) first
+python -m src.run \
+  --data data/framingham_sample.csv \
+  --target TenYearCHD \
+  --llm openai-oss
+```
+
+Results in: `results/summary.csv`, `results/imputed.csv`, `results/report.md`
 
 ---
 
@@ -119,17 +112,17 @@ Adapt `src/llm/llm_client.py` and the Lambda handler to integrate production LLM
 
 ---
 
-## Git Hygiene Tips
-- If results were previously tracked, run `git rm --cached results/*.csv results/*.md` before committing.
-- Keep downloaded model weights under `models/` (ignored) or mount them externally; never commit the 20B snapshot.
-- Regenerate local summaries after pulling if you need fresh artifacts for analysis.
+## Git Hygiene
+- Model weights in `models/` and results in `results/` are gitignored
+- Never commit large model files to the repository
 
 ---
 
 ## Troubleshooting
-- `ValueError: Target ... not in CSV columns`: fix `--target` or adjust `config/default.yaml`.
-- Long runtimes or memory spikes: ensure `--llm stub` unless the weights are present and hardware can host them.
-- `huggingface_hub` errors: confirm network access and authentication before running `model_download.py`.
+- **Target column error**: Fix `--target` or adjust column lists in `config/default.yaml`
+- **Memory issues**: Use `--llm stub` for classical methods only
+- **Import errors**: Run `pip install -r requirements-base.txt`
+- **Model download fails**: Some models need `huggingface-cli login`
 
 ---
 

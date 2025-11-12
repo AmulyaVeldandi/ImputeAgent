@@ -1,6 +1,7 @@
-import random
 import json
 import re
+import logging
+import numpy as np
 from pathlib import Path
 
 try:
@@ -13,20 +14,23 @@ except ImportError:
 
 from src.llm.prompts import DECIDER_PROMPT, IMPUTER_PROMPT, CRITIC_PROMPT
 
+logger = logging.getLogger(__name__)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MODEL_DIR = PROJECT_ROOT / "models" / "openai-gpt-oss-20b"
+DEFAULT_MODEL_DIR = PROJECT_ROOT / "models" / "phi-2"
 
 
 class LocalLLMClient:
     _MODEL_CACHE = {}
 
-    def __init__(self, backend="stub", model_name=None, enabled=True):
+    def __init__(self, backend="stub", model_name=None, enabled=True, random_seed=None):
         self.enabled = enabled
         self.backend = backend
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
         self.client = None
+        self.rng = np.random.RandomState(random_seed)
 
         if backend == "openai-oss" and enabled:
             if AutoTokenizer is None or AutoModelForCausalLM is None or torch is None:
@@ -46,18 +50,23 @@ class LocalLLMClient:
             cached = LocalLLMClient._MODEL_CACHE.get(cache_key)
             if cached:
                 self.tokenizer, self.model = cached
-                print(f"[LLM] Reusing cached model: {resolved_model}")
+                logger.info(f"Reusing cached model: {resolved_model}")
             else:
-                print(f"[LLM] Loading OpenAI OSS model from local path: {resolved_model}")
-                tokenizer = AutoTokenizer.from_pretrained(resolved_model, local_files_only=True)
-                model = AutoModelForCausalLM.from_pretrained(
-                    resolved_model,
-                    torch_dtype=torch.bfloat16,
-                    device_map="auto",
-                    local_files_only=True
-                )
-                LocalLLMClient._MODEL_CACHE[cache_key] = (tokenizer, model)
-                self.tokenizer, self.model = tokenizer, model
+                logger.info(f"Loading local LLM from: {resolved_model}")
+                try:
+                    tokenizer = AutoTokenizer.from_pretrained(resolved_model, local_files_only=True)
+                    model = AutoModelForCausalLM.from_pretrained(
+                        resolved_model,
+                        torch_dtype=torch.bfloat16,
+                        device_map="auto",
+                        local_files_only=True
+                    )
+                    LocalLLMClient._MODEL_CACHE[cache_key] = (tokenizer, model)
+                    self.tokenizer, self.model = tokenizer, model
+                    logger.info(f"Successfully loaded model: {resolved_model}")
+                except Exception as e:
+                    logger.error(f"Failed to load model from {resolved_model}: {e}")
+                    raise
             self.model_name = resolved_model
 
         elif backend == "bedrock" and enabled:
@@ -118,7 +127,8 @@ class LocalLLMClient:
             stats = payload.get("column_stats", {})
             if "min" in stats and "max" in stats:
                 v = 0.5 * (stats["min"] + stats["max"])
-                v += random.uniform(-0.05, 0.05) * (stats["max"] - stats["min"])
+                # Use seeded random generator for reproducibility
+                v += self.rng.uniform(-0.05, 0.05) * (stats["max"] - stats["min"])
                 return {"value": round(v, 2), "confidence": 0.75, "justification": "centered value (stub)"}
             av = stats.get("allowed_values", ["0"])
             return {"value": av[0], "confidence": 0.8, "justification": "most frequent (stub)"}
